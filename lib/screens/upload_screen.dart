@@ -1,5 +1,10 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
+import '../models.dart';
+import '../services/supabase_service.dart';
+import '../widgets/common_widgets.dart';
 import '../theme/app_theme.dart';
 
 class UploadScreen extends StatefulWidget {
@@ -10,197 +15,230 @@ class UploadScreen extends StatefulWidget {
 }
 
 class _UploadScreenState extends State<UploadScreen> {
-  int _visibility = 0; // 0=Public 1=Followers 2=Private
+  File? _image;
+  final _titleCtrl = TextEditingController();
+  final _descCtrl  = TextEditingController();
+  final _tagCtrl   = TextEditingController();
+  List<String> _tags = [];
+  int _visibility  = 0;
   String _category = '2D Illustration';
-  final List<String> _tags = ['#2D', '#Portrait', '#DigitalArt'];
+  bool _uploading  = false;
+
   final List<String> _categories = [
     '2D Illustration', '3D / CGI', 'Photography',
     'Traditional / Oil Paint', 'Sketch / Line Art', 'Animation / GIF',
   ];
 
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (picked != null) setState(() => _image = File(picked.path));
+  }
+
+  void _addTag() {
+    final tag = _tagCtrl.text.trim().replaceAll(' ', '');
+    if (tag.isEmpty) return;
+    final formatted = tag.startsWith('#') ? tag : '#$tag';
+    if (!_tags.contains(formatted)) setState(() => _tags.add(formatted));
+    _tagCtrl.clear();
+  }
+
+  Future<void> _post() async {
+    if (_image == null) { _snack('Please select an image'); return; }
+    if (_titleCtrl.text.trim().isEmpty) { _snack('Please add a title'); return; }
+
+    setState(() => _uploading = true);
+    try {
+      final uid = authService.currentUserId!;
+
+      // Upload image to Supabase Storage
+      final imageUrl = await storageService.uploadPostImage(_image!, uid);
+
+      // Save post to Supabase DB
+      await postService.createPost(PostModel(
+        id:          '',
+        authorId:    uid,
+        title:       _titleCtrl.text.trim(),
+        description: _descCtrl.text.trim(),
+        imageUrl:    imageUrl,
+        category:    _category,
+        tags:        _tags,
+        visibility:  ['public', 'followers', 'private'][_visibility],
+        likesCount:  0,
+        createdAt:   DateTime.now(),
+      ));
+
+      if (mounted) {
+        _snack('Artwork posted! 🎉');
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (mounted) _snack('Failed to post: ${e.toString()}');
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  void _snack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))));
+  }
+
+  @override
+  void dispose() {
+    _titleCtrl.dispose(); _descCtrl.dispose(); _tagCtrl.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Upload zone
+    return Scaffold(
+      backgroundColor: AppColors.cream,
+      appBar: AppBar(
+        backgroundColor: AppColors.warmWhite,
+        elevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Icons.close, color: AppColors.dark),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: Text('New Post',
+            style: GoogleFonts.dmSans(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.dark)),
+        bottom: PreferredSize(preferredSize: const Size.fromHeight(1),
+            child: Container(height: 1, color: AppColors.border)),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Image picker
           GestureDetector(
-            onTap: () => _snack('File picker would open here'),
+            onTap: _pickImage,
             child: Container(
+              height: 200,
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 32),
               decoration: BoxDecoration(
                 color: AppColors.peachPale,
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: AppColors.peachLight, width: 2,
-                    style: BorderStyle.solid),
+                border: Border.all(color: AppColors.peachLight, width: 2, style: BorderStyle.solid),
               ),
-              child: Column(
-                children: [
-                  const Text('🖼️', style: TextStyle(fontSize: 36)),
-                  const SizedBox(height: 8),
-                  Text('Upload Your Artwork',
-                      style: GoogleFonts.dmSans(
-                          fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.brown)),
-                  const SizedBox(height: 3),
-                  Text('JPG, PNG, GIF, MP4 · Max 50MB',
-                      style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.muted)),
-                ],
-              ),
+              clipBehavior: Clip.antiAlias,
+              child: _image != null
+                  ? Stack(fit: StackFit.expand, children: [
+                      Image.file(_image!, fit: BoxFit.cover),
+                      Positioned(
+                        top: 8, right: 8,
+                        child: GestureDetector(
+                          onTap: () => setState(() => _image = null),
+                          child: Container(
+                            decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                            padding: const EdgeInsets.all(4),
+                            child: const Icon(Icons.close, color: Colors.white, size: 16),
+                          ),
+                        ),
+                      ),
+                    ])
+                  : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      const Icon(Icons.add_photo_alternate_outlined, color: AppColors.peach, size: 40),
+                      const SizedBox(height: 8),
+                      Text('Tap to upload artwork',
+                          style: GoogleFonts.dmSans(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.brown)),
+                      Text('JPG, PNG · Max 50MB',
+                          style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.muted)),
+                    ]),
             ),
           ),
           const SizedBox(height: 16),
 
-          // Title
           _label('Title'),
           const SizedBox(height: 5),
-          TextField(
-            style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
-            decoration: const InputDecoration(hintText: 'Name your work…'),
-          ),
+          TextField(controller: _titleCtrl,
+              style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
+              decoration: const InputDecoration(hintText: 'Name your work…')),
           const SizedBox(height: 14),
 
-          // Description
           _label('Description'),
           const SizedBox(height: 5),
-          TextField(
-            maxLines: 3,
-            style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
-            decoration: const InputDecoration(
-              hintText: 'Share your process, inspiration, tools used…',
-            ),
-          ),
+          TextField(controller: _descCtrl, maxLines: 3,
+              style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
+              decoration: const InputDecoration(hintText: 'Share your process, inspiration, tools…')),
           const SizedBox(height: 14),
 
-          // Tags
           _label('Tags'),
           const SizedBox(height: 5),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              ..._tags.map((tag) => _tagChip(tag)),
-              GestureDetector(
-                onTap: () => _snack('Add a tag…'),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: AppColors.peachLight, width: 1.5,
-                        style: BorderStyle.solid),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text('+ Add tag',
-                      style: GoogleFonts.dmSans(fontSize: 12, color: AppColors.peach)),
-                ),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _tagCtrl,
+                style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
+                onSubmitted: (_) => _addTag(),
+                decoration: const InputDecoration(hintText: 'Add a tag…', prefixText: '#'),
               ),
-            ],
-          ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _addTag,
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: const BoxDecoration(color: AppColors.peach, shape: BoxShape.circle),
+                child: const Icon(Icons.add, color: Colors.white, size: 18),
+              ),
+            ),
+          ]),
+          if (_tags.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(spacing: 6, runSpacing: 6, children: _tags.map((t) =>
+                Chip(
+                  label: Text(t, style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.brown)),
+                  backgroundColor: AppColors.peachPale,
+                  side: const BorderSide(color: AppColors.peachLight),
+                  deleteIcon: const Icon(Icons.close, size: 14, color: AppColors.muted),
+                  onDeleted: () => setState(() => _tags.remove(t)),
+                  visualDensity: VisualDensity.compact,
+                )).toList()),
+          ],
           const SizedBox(height: 14),
 
-          // Visibility
-          _label('Visibility'),
-          const SizedBox(height: 5),
-          Row(
-            children: [
-              _visBtn('🌍 Public', 0),
-              const SizedBox(width: 8),
-              _visBtn('👥 Followers', 1),
-              const SizedBox(width: 8),
-              _visBtn('🔒 Private', 2),
-            ],
-          ),
-          const SizedBox(height: 14),
-
-          // Category
           _label('Category'),
           const SizedBox(height: 5),
           Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
             decoration: BoxDecoration(
-              color: AppColors.cardBg,
-              borderRadius: BorderRadius.circular(12),
+              color: AppColors.cardBg, borderRadius: BorderRadius.circular(12),
               border: Border.all(color: AppColors.border, width: 1.5),
             ),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
-                value: _category,
-                isExpanded: true,
+                value: _category, isExpanded: true,
                 style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
                 items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
                 onChanged: (v) => setState(() => _category = v!),
               ),
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 14),
 
-          // Post button
-          SizedBox(
-            width: double.infinity,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [AppColors.peach, AppColors.amber],
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                ),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.peach.withOpacity(0.35),
-                    blurRadius: 20,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: ElevatedButton(
-                onPressed: () => _snack('Artwork posted! 🎉'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.transparent,
-                  shadowColor: Colors.transparent,
-                  padding: const EdgeInsets.symmetric(vertical: 15),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                ),
-                child: Text('Post Artwork',
-                    style: GoogleFonts.dmSans(
-                        fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
-              ),
-            ),
-          ),
+          _label('Visibility'),
+          const SizedBox(height: 5),
+          Row(children: [
+            _visBtn('🌍 Public', 0),
+            const SizedBox(width: 8),
+            _visBtn('👥 Followers', 1),
+            const SizedBox(width: 8),
+            _visBtn('🔒 Private', 2),
+          ]),
           const SizedBox(height: 24),
-        ],
+
+          GradientButton(label: _uploading ? 'Posting…' : 'Post Artwork', onPressed: _post, loading: _uploading),
+          const SizedBox(height: 24),
+        ]),
       ),
     );
   }
 
-  Widget _label(String text) => Text(
-        text.toUpperCase(),
-        style: GoogleFonts.dmSans(
-            fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.muted, letterSpacing: 0.5),
-      );
-
-  Widget _tagChip(String tag) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        decoration: BoxDecoration(
-          color: AppColors.peachPale,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppColors.peachLight),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(tag, style: GoogleFonts.dmSans(fontSize: 12, color: AppColors.brown)),
-            const SizedBox(width: 4),
-            GestureDetector(
-              onTap: () => setState(() => _tags.remove(tag)),
-              child: Text('✕',
-                  style: GoogleFonts.dmSans(fontSize: 10, color: AppColors.muted)),
-            ),
-          ],
-        ),
-      );
+  Widget _label(String t) => Text(t.toUpperCase(),
+      style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w700,
+          color: AppColors.muted, letterSpacing: 0.5));
 
   Widget _visBtn(String label, int index) => Expanded(
         child: GestureDetector(
@@ -211,32 +249,12 @@ class _UploadScreenState extends State<UploadScreen> {
             decoration: BoxDecoration(
               color: _visibility == index ? AppColors.peach : AppColors.cardBg,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: _visibility == index ? AppColors.peach : AppColors.border,
-                width: 1.5,
-              ),
+              border: Border.all(color: _visibility == index ? AppColors.peach : AppColors.border, width: 1.5),
             ),
-            child: Text(
-              label,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.dmSans(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                color: _visibility == index ? Colors.white : AppColors.muted,
-              ),
-            ),
+            child: Text(label, textAlign: TextAlign.center,
+                style: GoogleFonts.dmSans(fontSize: 11, fontWeight: FontWeight.w500,
+                    color: _visibility == index ? Colors.white : AppColors.muted)),
           ),
         ),
       );
-
-  void _snack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
-  }
 }

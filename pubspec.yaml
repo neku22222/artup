@@ -1,5 +1,5 @@
 name: artup
-description: ArtUp - A portfolio & art sharing app.
+description: ArtUp - A portfolio & art sharing app powered by Supabase.
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,8 +9,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  supabase_flutter: ^2.3.0
   google_fonts: ^6.1.0
   cached_network_image: ^3.3.0
+  image_picker: ^1.0.7
+  timeago: ^3.6.0
+  uuid: ^4.3.3
   cupertino_icons: ^1.0.6
 
 dev_dependencies:

@@ -4,327 +4,137 @@ import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../models.dart';
 
-// ── Network Image with fallback ──────────────────────────────────────────────
-
+// ── Network Image ─────────────────────────────────────────────────────────────
 class AppNetworkImage extends StatelessWidget {
   final String url;
   final double? width;
   final double? height;
   final BoxFit fit;
-  final BorderRadius? borderRadius;
 
-  const AppNetworkImage({
-    super.key,
-    required this.url,
-    this.width,
-    this.height,
-    this.fit = BoxFit.cover,
-    this.borderRadius,
-  });
+  const AppNetworkImage({super.key, required this.url, this.width, this.height, this.fit = BoxFit.cover});
 
   @override
   Widget build(BuildContext context) {
-    Widget image = CachedNetworkImage(
-      imageUrl: url,
-      width: width,
-      height: height,
-      fit: fit,
-      placeholder: (_, __) => Container(color: AppColors.border),
-      errorWidget: (_, __, ___) => Container(
-        color: AppColors.border,
-        child: const Icon(Icons.broken_image_outlined, color: AppColors.muted),
-      ),
-    );
-
-    if (borderRadius != null) {
-      return ClipRRect(borderRadius: borderRadius!, child: image);
+    if (url.isEmpty) {
+      return Container(width: width, height: height, color: AppColors.border,
+          child: const Icon(Icons.image_outlined, color: AppColors.muted));
     }
-    return image;
-  }
-}
-
-// ── Story Ring ───────────────────────────────────────────────────────────────
-
-class StoryRing extends StatelessWidget {
-  final StoryModel story;
-
-  const StoryRing({super.key, required this.story});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: story.seen
-                ? null
-                : const LinearGradient(
-                    colors: [AppColors.peach, AppColors.amber],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-            color: story.seen ? AppColors.border : null,
-          ),
-          padding: const EdgeInsets.all(2),
-          child: Container(
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              color: AppColors.cream,
-            ),
-            padding: const EdgeInsets.all(2),
-            child: ClipOval(
-              child: story.isOwn
-                  ? Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        AppNetworkImage(url: story.avatarUrl, width: 48, height: 48),
-                        Positioned(
-                          bottom: 0,
-                          right: 0,
-                          child: Container(
-                            width: 18,
-                            height: 18,
-                            decoration: const BoxDecoration(
-                              color: AppColors.peach,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.add, color: Colors.white, size: 12),
-                          ),
-                        ),
-                      ],
-                    )
-                  : AppNetworkImage(url: story.avatarUrl, width: 48, height: 48),
-            ),
-          ),
-        ),
-        const SizedBox(height: 5),
-        SizedBox(
-          width: 56,
-          child: Text(
-            story.name,
-            style: GoogleFonts.dmSans(fontSize: 9, color: AppColors.muted),
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
+    return CachedNetworkImage(
+      imageUrl: url, width: width, height: height, fit: fit,
+      placeholder: (_, __) => Container(width: width, height: height, color: AppColors.border),
+      errorWidget: (_, __, ___) => Container(width: width, height: height, color: AppColors.border,
+          child: const Icon(Icons.broken_image_outlined, color: AppColors.muted)),
     );
   }
 }
 
-// ── Artwork Card ─────────────────────────────────────────────────────────────
-
-class ArtworkCard extends StatelessWidget {
-  final ArtworkModel artwork;
+// ── Avatar ────────────────────────────────────────────────────────────────────
+class UserAvatar extends StatelessWidget {
+  final String url;
+  final double size;
   final VoidCallback? onTap;
 
-  const ArtworkCard({super.key, required this.artwork, this.onTap});
-
-  String _formatLikes(int likes) {
-    if (likes >= 1000) return '${(likes / 1000).toStringAsFixed(1)}k';
-    return likes.toString();
-  }
+  const UserAvatar({super.key, required this.url, this.size = 40, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      child: ClipOval(
+        child: url.isEmpty
+            ? Container(width: size, height: size, color: AppColors.peachPale,
+                child: Icon(Icons.person, color: AppColors.peach, size: size * 0.5))
+            : AppNetworkImage(url: url, width: size, height: size),
+      ),
+    );
+  }
+}
+
+// ── Post Card ─────────────────────────────────────────────────────────────────
+class PostCard extends StatefulWidget {
+  final PostModel post;
+  final VoidCallback? onTap;
+  final VoidCallback? onAuthorTap;
+  final Future<void> Function(PostModel)? onLike;
+
+  const PostCard({super.key, required this.post, this.onTap, this.onAuthorTap, this.onLike});
+
+  @override
+  State<PostCard> createState() => _PostCardState();
+}
+
+class _PostCardState extends State<PostCard> {
+  bool _loading = false;
+
+  String _fmt(int n) => n >= 1000 ? '${(n / 1000).toStringAsFixed(1)}k' : '$n';
+
+  @override
+  Widget build(BuildContext context) {
+    final post = widget.post;
+    return GestureDetector(
+      onTap: widget.onTap,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
         child: AspectRatio(
           aspectRatio: 4 / 3,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              AppNetworkImage(url: artwork.imageUrl),
-              Positioned(
-                top: 8,
-                right: 8,
-                child: Container(
+          child: Stack(fit: StackFit.expand, children: [
+            AppNetworkImage(url: post.imageUrl),
+            // Like badge
+            Positioned(
+              top: 8, right: 8,
+              child: GestureDetector(
+                onTap: () async {
+                  if (_loading || widget.onLike == null) return;
+                  setState(() => _loading = true);
+                  await widget.onLike!(post);
+                  setState(() => _loading = false);
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
+                    color: post.isLiked
+                        ? AppColors.peach.withOpacity(0.9)
+                        : Colors.white.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.favorite, color: Colors.white, size: 10),
-                      const SizedBox(width: 3),
-                      Text(
-                        _formatLikes(artwork.likes),
-                        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(post.isLiked ? Icons.favorite : Icons.favorite_border,
+                        color: Colors.white, size: 10),
+                    const SizedBox(width: 3),
+                    Text(_fmt(post.likesCount),
+                        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600)),
+                  ]),
+                ),
+              ),
+            ),
+            // Overlay
+            Positioned(
+              bottom: 0, left: 0, right: 0,
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Color(0xAA140C08)],
+                  ),
+                ),
+                padding: const EdgeInsets.fromLTRB(10, 20, 10, 8),
+                child: Row(children: [
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(post.title,
+                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    if (post.authorHandle != null)
+                      GestureDetector(
+                        onTap: widget.onAuthorTap,
+                        child: Text('@${post.authorHandle}',
+                            style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 9)),
                       ),
-                    ],
-                  ),
-                ),
-              ),
-              Positioned(
-                bottom: 0, left: 0, right: 0,
-                child: Container(
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Colors.transparent, Color(0xAA140C08)],
-                    ),
-                  ),
-                  padding: const EdgeInsets.fromLTRB(10, 20, 10, 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(artwork.title,
-                          style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
-                      Text(artwork.authorHandle,
-                          style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 9)),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Creator Card ─────────────────────────────────────────────────────────────
-
-class CreatorCard extends StatefulWidget {
-  final CreatorModel creator;
-
-  const CreatorCard({super.key, required this.creator});
-
-  @override
-  State<CreatorCard> createState() => _CreatorCardState();
-}
-
-class _CreatorCardState extends State<CreatorCard> {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 90,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.cardBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        children: [
-          ClipOval(
-            child: AppNetworkImage(url: widget.creator.avatarUrl, width: 44, height: 44),
-          ),
-          const SizedBox(height: 6),
-          Text(widget.creator.name,
-              style: GoogleFonts.dmSans(fontSize: 9, fontWeight: FontWeight.w600, color: AppColors.dark),
-              textAlign: TextAlign.center),
-          Text('${widget.creator.workCount} works',
-              style: GoogleFonts.dmSans(fontSize: 8, color: AppColors.muted)),
-          const SizedBox(height: 6),
-          GestureDetector(
-            onTap: () => setState(() => widget.creator.isFollowing = !widget.creator.isFollowing),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-              decoration: BoxDecoration(
-                color: widget.creator.isFollowing ? AppColors.peachPale : AppColors.peach,
-                borderRadius: BorderRadius.circular(20),
-                border: widget.creator.isFollowing
-                    ? Border.all(color: AppColors.peachLight)
-                    : null,
-              ),
-              child: Text(
-                widget.creator.isFollowing ? 'Following' : 'Follow',
-                style: GoogleFonts.dmSans(
-                  fontSize: 8,
-                  fontWeight: FontWeight.w600,
-                  color: widget.creator.isFollowing ? AppColors.peach : Colors.white,
-                ),
+                  ])),
+                ]),
               ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Section Header ────────────────────────────────────────────────────────────
-
-class SectionHeader extends StatelessWidget {
-  final String title;
-  final String? actionLabel;
-  final VoidCallback? onAction;
-
-  const SectionHeader({super.key, required this.title, this.actionLabel, this.onAction});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(title, style: GoogleFonts.dmSans(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.dark)),
-          if (actionLabel != null)
-            GestureDetector(
-              onTap: onAction,
-              child: Text(actionLabel!,
-                  style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.peach, fontWeight: FontWeight.w500)),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Trending Tag Card ─────────────────────────────────────────────────────────
-
-class TrendingTagCard extends StatelessWidget {
-  final TrendingTagModel tag;
-  final VoidCallback? onTap;
-
-  const TrendingTagCard({super.key, required this.tag, this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: AspectRatio(
-          aspectRatio: 1,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              ColorFiltered(
-                colorFilter: const ColorFilter.mode(Color(0x33000000), BlendMode.darken),
-                child: AppNetworkImage(url: tag.imageUrl),
-              ),
-              Positioned(
-                bottom: 0, left: 0, right: 0,
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(10, 16, 10, 10),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Colors.transparent, Color(0xB3140A05)],
-                    ),
-                  ),
-                  child: Text(
-                    tag.tag,
-                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          ]),
         ),
       ),
     );
@@ -332,13 +142,13 @@ class TrendingTagCard extends StatelessWidget {
 }
 
 // ── Search Bar ────────────────────────────────────────────────────────────────
-
 class AppSearchBar extends StatelessWidget {
   final String hint;
   final TextEditingController? controller;
   final ValueChanged<String>? onChanged;
+  final VoidCallback? onSubmit;
 
-  const AppSearchBar({super.key, required this.hint, this.controller, this.onChanged});
+  const AppSearchBar({super.key, required this.hint, this.controller, this.onChanged, this.onSubmit});
 
   @override
   Widget build(BuildContext context) {
@@ -349,34 +159,33 @@ class AppSearchBar extends StatelessWidget {
         border: Border.all(color: AppColors.border, width: 1.5),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      child: Row(
-        children: [
-          const Icon(Icons.search, color: AppColors.muted, size: 16),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              onChanged: onChanged,
-              style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
-              decoration: InputDecoration(
-                hintText: hint,
-                hintStyle: GoogleFonts.dmSans(fontSize: 14, color: AppColors.muted),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
-                fillColor: Colors.transparent,
-                filled: false,
-              ),
+      child: Row(children: [
+        const Icon(Icons.search, color: AppColors.muted, size: 16),
+        const SizedBox(width: 8),
+        Expanded(
+          child: TextField(
+            controller: controller, onChanged: onChanged,
+            onSubmitted: onSubmit != null ? (_) => onSubmit!() : null,
+            style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: GoogleFonts.dmSans(fontSize: 14, color: AppColors.muted),
+              border: InputBorder.none, isDense: true,
+              contentPadding: EdgeInsets.zero, filled: false,
             ),
           ),
-        ],
-      ),
+        ),
+        if (controller != null && (controller!.text.isNotEmpty))
+          GestureDetector(
+            onTap: () { controller!.clear(); onChanged?.call(''); },
+            child: const Icon(Icons.close, color: AppColors.muted, size: 14),
+          ),
+      ]),
     );
   }
 }
 
 // ── Filter Chip ───────────────────────────────────────────────────────────────
-
 class AppFilterChip extends StatelessWidget {
   final String label;
   final bool isActive;
@@ -394,18 +203,118 @@ class AppFilterChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: isActive ? AppColors.peach : AppColors.cardBg,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isActive ? AppColors.peach : AppColors.border,
-            width: 1.5,
-          ),
+          border: Border.all(color: isActive ? AppColors.peach : AppColors.border, width: 1.5),
         ),
-        child: Text(
-          label,
-          style: GoogleFonts.dmSans(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: isActive ? Colors.white : AppColors.muted,
+        child: Text(label,
+            style: GoogleFonts.dmSans(
+                fontSize: 12, fontWeight: FontWeight.w500,
+                color: isActive ? Colors.white : AppColors.muted)),
+      ),
+    );
+  }
+}
+
+// ── Section Header ────────────────────────────────────────────────────────────
+class SectionHeader extends StatelessWidget {
+  final String title;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  const SectionHeader({super.key, required this.title, this.actionLabel, this.onAction});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(title, style: GoogleFonts.dmSans(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.dark)),
+        if (actionLabel != null)
+          GestureDetector(onTap: onAction,
+              child: Text(actionLabel!, style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.peach, fontWeight: FontWeight.w500))),
+      ]),
+    );
+  }
+}
+
+// ── Error/Empty State ─────────────────────────────────────────────────────────
+class EmptyState extends StatelessWidget {
+  final String emoji;
+  final String title;
+  final String subtitle;
+
+  const EmptyState({super.key, required this.emoji, required this.title, required this.subtitle});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(emoji, style: const TextStyle(fontSize: 48)),
+          const SizedBox(height: 12),
+          Text(title, style: GoogleFonts.dmSans(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.dark),
+              textAlign: TextAlign.center),
+          const SizedBox(height: 6),
+          Text(subtitle, style: GoogleFonts.dmSans(fontSize: 13, color: AppColors.muted),
+              textAlign: TextAlign.center),
+        ]),
+      ),
+    );
+  }
+}
+
+// ── Loading Grid ──────────────────────────────────────────────────────────────
+class LoadingGrid extends StatelessWidget {
+  const LoadingGrid({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 4 / 3,
+        ),
+        itemCount: 6,
+        itemBuilder: (_, __) => ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Container(color: AppColors.border),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Gradient Button ───────────────────────────────────────────────────────────
+class GradientButton extends StatelessWidget {
+  final String label;
+  final VoidCallback? onPressed;
+  final bool loading;
+
+  const GradientButton({super.key, required this.label, this.onPressed, this.loading = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(colors: [AppColors.peach, AppColors.amber]),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [BoxShadow(color: AppColors.peach.withOpacity(0.35), blurRadius: 20, offset: const Offset(0, 6))],
+        ),
+        child: ElevatedButton(
+          onPressed: loading ? null : onPressed,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.transparent, shadowColor: Colors.transparent,
+            padding: const EdgeInsets.symmetric(vertical: 15),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           ),
+          child: loading
+              ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+              : Text(label, style: GoogleFonts.dmSans(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
         ),
       ),
     );
