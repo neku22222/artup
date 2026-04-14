@@ -15,7 +15,10 @@ class UploadScreen extends StatefulWidget {
 }
 
 class _UploadScreenState extends State<UploadScreen> {
-  File? _image;
+  // ── Fix #8: up to 5 images ──────────────────────────────────────────────
+  final List<File> _images = [];
+  static const int _maxImages = 5;
+
   final _titleCtrl = TextEditingController();
   final _descCtrl  = TextEditingController();
   final _tagCtrl   = TextEditingController();
@@ -29,11 +32,23 @@ class _UploadScreenState extends State<UploadScreen> {
     'Traditional / Oil Paint', 'Sketch / Line Art', 'Animation / GIF',
   ];
 
-  Future<void> _pickImage() async {
+  Future<void> _pickImages() async {
+    if (_images.length >= _maxImages) {
+      _snack('Maximum $_maxImages images allowed');
+      return;
+    }
     final picker = ImagePicker();
-    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
-    if (picked != null) setState(() => _image = File(picked.path));
+    final remaining = _maxImages - _images.length;
+    final picked = await picker.pickMultiImage(imageQuality: 85, limit: remaining);
+    if (picked.isNotEmpty) {
+      setState(() {
+        final toAdd = picked.take(remaining).map((x) => File(x.path));
+        _images.addAll(toAdd);
+      });
+    }
   }
+
+  void _removeImage(int index) => setState(() => _images.removeAt(index));
 
   void _addTag() {
     final tag = _tagCtrl.text.trim().replaceAll(' ', '');
@@ -44,23 +59,24 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<void> _post() async {
-    if (_image == null) { _snack('Please select an image'); return; }
+    if (_images.isEmpty) { _snack('Please select at least one image'); return; }
     if (_titleCtrl.text.trim().isEmpty) { _snack('Please add a title'); return; }
 
     setState(() => _uploading = true);
     try {
       final uid = authService.currentUserId!;
 
-      // Upload image to Supabase Storage
-      final imageUrl = await storageService.uploadPostImage(_image!, uid);
+      // Upload all images in parallel
+      final uploadFutures = _images.map((f) => storageService.uploadPostImage(f, uid));
+      final imageUrls = await Future.wait(uploadFutures);
 
-      // Save post to Supabase DB
       await postService.createPost(PostModel(
         id:          '',
         authorId:    uid,
         title:       _titleCtrl.text.trim(),
         description: _descCtrl.text.trim(),
-        imageUrl:    imageUrl,
+        imageUrl:    imageUrls.first,  // primary = first image
+        imageUrls:   imageUrls,
         category:    _category,
         tags:        _tags,
         visibility:  ['public', 'followers', 'private'][_visibility],
@@ -80,9 +96,10 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   void _snack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))));
   }
 
   @override
@@ -104,64 +121,35 @@ class _UploadScreenState extends State<UploadScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text('New Post',
-            style: GoogleFonts.dmSans(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.dark)),
-        bottom: PreferredSize(preferredSize: const Size.fromHeight(1),
+            style: GoogleFonts.dmSans(
+                fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.dark)),
+        bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1),
             child: Container(height: 1, color: AppColors.border)),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Image picker
-          GestureDetector(
-            onTap: _pickImage,
-            child: Container(
-              height: 200,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: AppColors.peachPale,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: AppColors.peachLight, width: 2, style: BorderStyle.solid),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: _image != null
-                  ? Stack(fit: StackFit.expand, children: [
-                      Image.file(_image!, fit: BoxFit.cover),
-                      Positioned(
-                        top: 8, right: 8,
-                        child: GestureDetector(
-                          onTap: () => setState(() => _image = null),
-                          child: Container(
-                            decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                            padding: const EdgeInsets.all(4),
-                            child: const Icon(Icons.close, color: Colors.white, size: 16),
-                          ),
-                        ),
-                      ),
-                    ])
-                  : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                      const Icon(Icons.add_photo_alternate_outlined, color: AppColors.peach, size: 40),
-                      const SizedBox(height: 8),
-                      Text('Tap to upload artwork',
-                          style: GoogleFonts.dmSans(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.brown)),
-                      Text('JPG, PNG · Max 50MB',
-                          style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.muted)),
-                    ]),
-            ),
-          ),
+          // ── Image picker area ──────────────────────────────────────────
+          _buildImagePicker(),
           const SizedBox(height: 16),
 
           _label('Title'),
           const SizedBox(height: 5),
-          TextField(controller: _titleCtrl,
+          TextField(
+              controller: _titleCtrl,
               style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
               decoration: const InputDecoration(hintText: 'Name your work…')),
           const SizedBox(height: 14),
 
           _label('Description'),
           const SizedBox(height: 5),
-          TextField(controller: _descCtrl, maxLines: 3,
+          TextField(
+              controller: _descCtrl,
+              maxLines: 3,
               style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
-              decoration: const InputDecoration(hintText: 'Share your process, inspiration, tools…')),
+              decoration: const InputDecoration(
+                  hintText: 'Share your process, inspiration, tools…')),
           const SizedBox(height: 14),
 
           _label('Tags'),
@@ -172,7 +160,8 @@ class _UploadScreenState extends State<UploadScreen> {
                 controller: _tagCtrl,
                 style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
                 onSubmitted: (_) => _addTag(),
-                decoration: const InputDecoration(hintText: 'Add a tag…', prefixText: '#'),
+                decoration: const InputDecoration(
+                    hintText: 'Add a tag…', prefixText: '#'),
               ),
             ),
             const SizedBox(width: 8),
@@ -180,22 +169,30 @@ class _UploadScreenState extends State<UploadScreen> {
               onTap: _addTag,
               child: Container(
                 padding: const EdgeInsets.all(10),
-                decoration: const BoxDecoration(color: AppColors.peach, shape: BoxShape.circle),
+                decoration: const BoxDecoration(
+                    color: AppColors.peach, shape: BoxShape.circle),
                 child: const Icon(Icons.add, color: Colors.white, size: 18),
               ),
             ),
           ]),
           if (_tags.isNotEmpty) ...[
             const SizedBox(height: 8),
-            Wrap(spacing: 6, runSpacing: 6, children: _tags.map((t) =>
-                Chip(
-                  label: Text(t, style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.brown)),
-                  backgroundColor: AppColors.peachPale,
-                  side: const BorderSide(color: AppColors.peachLight),
-                  deleteIcon: const Icon(Icons.close, size: 14, color: AppColors.muted),
-                  onDeleted: () => setState(() => _tags.remove(t)),
-                  visualDensity: VisualDensity.compact,
-                )).toList()),
+            Wrap(
+              spacing: 6, runSpacing: 6,
+              children: _tags
+                  .map((t) => Chip(
+                        label: Text(t,
+                            style: GoogleFonts.dmSans(
+                                fontSize: 11, color: AppColors.brown)),
+                        backgroundColor: AppColors.peachPale,
+                        side: const BorderSide(color: AppColors.peachLight),
+                        deleteIcon:
+                            const Icon(Icons.close, size: 14, color: AppColors.muted),
+                        onDeleted: () => setState(() => _tags.remove(t)),
+                        visualDensity: VisualDensity.compact,
+                      ))
+                  .toList(),
+            ),
           ],
           const SizedBox(height: 14),
 
@@ -203,15 +200,19 @@ class _UploadScreenState extends State<UploadScreen> {
           const SizedBox(height: 5),
           Container(
             decoration: BoxDecoration(
-              color: AppColors.cardBg, borderRadius: BorderRadius.circular(12),
+              color: AppColors.cardBg,
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(color: AppColors.border, width: 1.5),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
-                value: _category, isExpanded: true,
+                value: _category,
+                isExpanded: true,
                 style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark),
-                items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                items: _categories
+                    .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                    .toList(),
                 onChanged: (v) => setState(() => _category = v!),
               ),
             ),
@@ -229,16 +230,134 @@ class _UploadScreenState extends State<UploadScreen> {
           ]),
           const SizedBox(height: 24),
 
-          GradientButton(label: _uploading ? 'Posting…' : 'Post Artwork', onPressed: _post, loading: _uploading),
+          GradientButton(
+              label: _uploading ? 'Posting…' : 'Post Artwork',
+              onPressed: _post,
+              loading: _uploading),
           const SizedBox(height: 24),
         ]),
       ),
     );
   }
 
-  Widget _label(String t) => Text(t.toUpperCase(),
-      style: GoogleFonts.dmSans(fontSize: 10, fontWeight: FontWeight.w700,
-          color: AppColors.muted, letterSpacing: 0.5));
+  // ── Fix #8: multi-image grid picker ──────────────────────────────────────
+  Widget _buildImagePicker() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        _label('Images'),
+        Text('${_images.length} / $_maxImages',
+            style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.muted)),
+      ]),
+      const SizedBox(height: 8),
+      if (_images.isEmpty)
+        // Empty state — tap to pick
+        GestureDetector(
+          onTap: _pickImages,
+          child: Container(
+            height: 160,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: AppColors.peachPale,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                  color: AppColors.peachLight, width: 2,
+                  style: BorderStyle.solid),
+            ),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.add_photo_alternate_outlined,
+                  color: AppColors.peach, size: 40),
+              const SizedBox(height: 8),
+              Text('Tap to add images',
+                  style: GoogleFonts.dmSans(
+                      fontSize: 14, fontWeight: FontWeight.w600,
+                      color: AppColors.brown)),
+              Text('Up to $_maxImages images · JPG, PNG',
+                  style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.muted)),
+            ]),
+          ),
+        )
+      else
+        // Grid of selected images + add button
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3, crossAxisSpacing: 6, mainAxisSpacing: 6),
+          itemCount: _images.length < _maxImages
+              ? _images.length + 1
+              : _images.length,
+          itemBuilder: (_, i) {
+            // Last cell = add button (if under limit)
+            if (i == _images.length) {
+              return GestureDetector(
+                onTap: _pickImages,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.peachPale,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: AppColors.peachLight, width: 1.5,
+                        style: BorderStyle.solid),
+                  ),
+                  child: const Icon(Icons.add_photo_alternate_outlined,
+                      color: AppColors.peach, size: 28),
+                ),
+              );
+            }
+            // Image cell with remove button
+            return Stack(children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.file(_images[i],
+                    fit: BoxFit.cover,
+                    width: double.infinity,
+                    height: double.infinity),
+              ),
+              // First image badge
+              if (i == 0)
+                Positioned(
+                  top: 4, left: 4,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppColors.peach,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text('Cover',
+                        style: GoogleFonts.dmSans(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white)),
+                  ),
+                ),
+              // Remove button
+              Positioned(
+                top: 4, right: 4,
+                child: GestureDetector(
+                  onTap: () => _removeImage(i),
+                  child: Container(
+                    decoration: const BoxDecoration(
+                        color: Colors.black54, shape: BoxShape.circle),
+                    padding: const EdgeInsets.all(3),
+                    child: const Icon(Icons.close, color: Colors.white, size: 13),
+                  ),
+                ),
+              ),
+            ]);
+          },
+        ),
+    ]);
+  }
+
+  Widget _label(String t) => Text(
+        t.toUpperCase(),
+        style: GoogleFonts.dmSans(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            color: AppColors.muted,
+            letterSpacing: 0.5),
+      );
 
   Widget _visBtn(String label, int index) => Expanded(
         child: GestureDetector(
@@ -249,10 +368,15 @@ class _UploadScreenState extends State<UploadScreen> {
             decoration: BoxDecoration(
               color: _visibility == index ? AppColors.peach : AppColors.cardBg,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _visibility == index ? AppColors.peach : AppColors.border, width: 1.5),
+              border: Border.all(
+                  color: _visibility == index ? AppColors.peach : AppColors.border,
+                  width: 1.5),
             ),
-            child: Text(label, textAlign: TextAlign.center,
-                style: GoogleFonts.dmSans(fontSize: 11, fontWeight: FontWeight.w500,
+            child: Text(label,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.dmSans(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
                     color: _visibility == index ? Colors.white : AppColors.muted)),
           ),
         ),

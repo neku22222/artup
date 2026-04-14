@@ -14,17 +14,44 @@ class SearchScreen extends StatefulWidget {
   State<SearchScreen> createState() => _SearchScreenState();
 }
 
-class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderStateMixin {
+class _SearchScreenState extends State<SearchScreen>
+    with SingleTickerProviderStateMixin {
   late final TabController _tabs = TabController(length: 2, vsync: this);
   final _ctrl = TextEditingController();
-  String _query = '';
   List<PostModel> _posts = [];
   List<ProfileModel> _profiles = [];
   bool _loading = false;
   bool _searched = false;
 
-  final List<String> _categories = ['All', '2D', '3D', 'Photography', 'Sketch', 'Digital', 'Oil Paint'];
+  final List<String> _categories = [
+    'All', '2D', '3D', 'Photography', 'Sketch', 'Digital', 'Oil Paint'
+  ];
   int _activeFilter = 0;
+
+  // ── Fix #6: each tag card holds its top-post image URL ──────────────────
+  static const List<String> _tags = [
+    '#Renaissance', '#Landscape', '#WaterColour',
+    '#Architecture', '#Sketch', '#Portrait',
+  ];
+  final Map<String, String> _tagImages = {};
+  bool _tagImagesLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTagImages();
+  }
+
+  Future<void> _loadTagImages() async {
+    final Map<String, String> loaded = {};
+    await Future.wait(_tags.map((tag) async {
+      try {
+        final post = await postService.getTopPostForTag(tag);
+        if (post != null) loaded[tag] = post.imageUrl;
+      } catch (_) {}
+    }));
+    if (mounted) setState(() { _tagImages.addAll(loaded); _tagImagesLoaded = true; });
+  }
 
   @override
   void dispose() {
@@ -55,10 +82,10 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   }
 
   Future<void> _searchByTag(String tag) async {
-    setState(() { _loading = true; _searched = true; _query = tag; _ctrl.text = tag; });
+    setState(() { _loading = true; _searched = true; _ctrl.text = tag; });
     try {
       final posts = await postService.searchByTag(tag);
-      if (mounted) setState(() { _posts = posts; _loading = false; });
+      if (mounted) setState(() { _posts = posts; _profiles = []; _loading = false; });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -72,13 +99,16 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
         child: AppSearchBar(
           hint: 'Search artists, styles, tags…',
           controller: _ctrl,
-          onChanged: (v) { setState(() => _query = v); if (v.isEmpty) _search(''); },
+          onChanged: (v) {
+            setState(() {});
+            if (v.isEmpty) _search('');
+          },
           onSubmit: () => _search(_ctrl.text.trim()),
         ),
       ),
 
       if (!_searched) ...[
-        // Category filter chips
+        // Category chips
         SizedBox(
           height: 48,
           child: ListView.separated(
@@ -91,33 +121,37 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
               isActive: _activeFilter == i,
               onTap: () {
                 setState(() => _activeFilter = i);
-                if (i == 0) _search(''); else _search(_categories[i]);
+                if (i == 0) _search('');
+                else _searchByTag('#${_categories[i]}');
               },
             ),
           ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: Text('TRENDING TAGS', style: GoogleFonts.dmSans(
-              fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.muted, letterSpacing: 1)),
+          child: Text('TRENDING TAGS',
+              style: GoogleFonts.dmSans(
+                  fontSize: 10, fontWeight: FontWeight.w700,
+                  color: AppColors.muted, letterSpacing: 1)),
         ),
         Expanded(
           child: GridView.count(
-            crossAxisCount: 2, mainAxisSpacing: 8, crossAxisSpacing: 8,
+            crossAxisCount: 2,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
             childAspectRatio: 1,
-            children: const [
-              _TagCard(tag: '#Renaissance', color: Color(0xFF7B4F3A)),
-              _TagCard(tag: '#Landscape',  color: Color(0xFF3A6B4F)),
-              _TagCard(tag: '#WaterColour', color: Color(0xFF3A4F7B)),
-              _TagCard(tag: '#Sketch',     color: Color(0xFF5A5A5A)),
-              _TagCard(tag: '#3D',         color: Color(0xFF6B3A7B)),
-              _TagCard(tag: '#Portrait',   color: Color(0xFF7B6B3A)),
-            ],
+            children: _tags.map((tag) {
+              final imgUrl = _tagImages[tag] ?? '';
+              return _TagCard(
+                tag: tag,
+                imageUrl: imgUrl,
+                onTap: () => _searchByTag(tag),
+              );
+            }).toList(),
           ),
         ),
       ] else ...[
-        // Tab bar for results
         Container(
           color: AppColors.warmWhite,
           child: TabBar(
@@ -145,6 +179,59 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   }
 }
 
+// ── Fix #6: tag card shows real top-post image ────────────────────────────────
+class _TagCard extends StatelessWidget {
+  final String tag;
+  final String imageUrl;
+  final VoidCallback onTap;
+
+  static const List<Color> _fallbackColors = [
+    Color(0xFF7B4F3A), Color(0xFF3A6B4F), Color(0xFF3A4F7B),
+    Color(0xFF5A5A5A), Color(0xFF6B3A7B), Color(0xFF7B6B3A),
+  ];
+
+  const _TagCard({required this.tag, required this.imageUrl, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = _fallbackColors[tag.length % _fallbackColors.length];
+
+    return GestureDetector(
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Stack(fit: StackFit.expand, children: [
+          // Real image if available, fallback color otherwise
+          if (imageUrl.isNotEmpty)
+            AppNetworkImage(url: imageUrl, fit: BoxFit.cover)
+          else
+            Container(color: fallback),
+
+          // Dark scrim so tag text is always readable
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.transparent, Colors.black.withOpacity(0.6)],
+              ),
+            ),
+          ),
+
+          // Tag label
+          Positioned(
+            bottom: 10, left: 10, right: 10,
+            child: Text(tag,
+                style: GoogleFonts.dmSans(
+                    fontSize: 13, fontWeight: FontWeight.w700,
+                    color: Colors.white)),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
 class _PostResults extends StatelessWidget {
   final List<PostModel> posts;
   const _PostResults({required this.posts});
@@ -152,18 +239,24 @@ class _PostResults extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (posts.isEmpty) {
-      return const EmptyState(emoji: '🔍', title: 'No artworks found', subtitle: 'Try a different search term or tag');
+      return const EmptyState(
+          emoji: '🔍',
+          title: 'No artworks found',
+          subtitle: 'Try a different search term or tag');
     }
     return GridView.builder(
       padding: const EdgeInsets.all(16),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 4 / 3,
+        crossAxisCount: 2, crossAxisSpacing: 8,
+        mainAxisSpacing: 8, childAspectRatio: 4 / 3,
       ),
       itemCount: posts.length,
       itemBuilder: (_, i) => PostCard(
         post: posts[i],
-        onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => PostDetailScreen(postId: posts[i].id))),
-        onAuthorTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProfileScreen(userId: posts[i].authorId))),
+        onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => PostDetailScreen(postId: posts[i].id))),
+        onAuthorTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => ProfileScreen(userId: posts[i].authorId))),
       ),
     );
   }
@@ -176,52 +269,36 @@ class _ProfileResults extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (profiles.isEmpty) {
-      return const EmptyState(emoji: '👤', title: 'No artists found', subtitle: 'Try searching by handle or name');
+      return const EmptyState(
+          emoji: '👤',
+          title: 'No artists found',
+          subtitle: 'Try searching by handle or name');
     }
     return ListView.separated(
       padding: const EdgeInsets.all(16),
       itemCount: profiles.length,
-      separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.border),
+      separatorBuilder: (_, __) =>
+          const Divider(height: 1, color: AppColors.border),
       itemBuilder: (_, i) {
         final p = profiles[i];
         return ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: 6),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 0, vertical: 6),
           leading: UserAvatar(url: p.avatarUrl, size: 44),
-          title: Text(p.fullName.isNotEmpty ? p.fullName : p.handle,
-              style: GoogleFonts.dmSans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.dark)),
+          title: Text(
+              p.fullName.isNotEmpty ? p.fullName : p.handle,
+              style: GoogleFonts.dmSans(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                  color: AppColors.dark)),
           subtitle: Text('@${p.handle}',
               style: GoogleFonts.dmSans(fontSize: 12, color: AppColors.muted)),
           trailing: Text('${p.postsCount} works',
               style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.muted)),
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProfileScreen(userId: p.id))),
+          onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => ProfileScreen(userId: p.id))),
         );
       },
-    );
-  }
-}
-
-class _TagCard extends StatelessWidget {
-  final String tag;
-  final Color color;
-  const _TagCard({required this.tag, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        final state = context.findAncestorStateOfType<_SearchScreenState>();
-        state?._searchByTag(tag);
-      },
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          color: color,
-          alignment: Alignment.bottomLeft,
-          padding: const EdgeInsets.all(12),
-          child: Text(tag, style: GoogleFonts.dmSans(
-              fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
-        ),
-      ),
     );
   }
 }

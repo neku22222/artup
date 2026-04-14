@@ -3,13 +3,14 @@ class ProfileModel {
   final String handle;
   final String fullName;
   final String bio;
-  final String avatarUrl;
+  String avatarUrl; // mutable for optimistic avatar update
   final String website;
-  final int followersCount;
-  final int followingCount;
-  final int postsCount;
+  // mutable so we can optimistically update counts
+  int followersCount;
+  int followingCount;
+  int postsCount;
 
-  const ProfileModel({
+  ProfileModel({
     required this.id,
     required this.handle,
     required this.fullName,
@@ -44,13 +45,15 @@ class PostModel {
   final String authorId;
   final String title;
   final String description;
+  // Primary image (first, used for thumbnails)
   final String imageUrl;
+  // All images, up to 5
+  final List<String> imageUrls;
   final String category;
   final List<String> tags;
   final String visibility;
-  final int likesCount;
+  int likesCount; // mutable for optimistic updates
   final DateTime createdAt;
-  // Joined fields from posts_with_author view
   final String? authorHandle;
   final String? authorName;
   final String? authorAvatar;
@@ -62,6 +65,7 @@ class PostModel {
     required this.title,
     required this.description,
     required this.imageUrl,
+    List<String>? imageUrls,
     required this.category,
     required this.tags,
     required this.visibility,
@@ -71,28 +75,36 @@ class PostModel {
     this.authorName,
     this.authorAvatar,
     this.isLiked = false,
-  });
+  }) : imageUrls = (imageUrls != null && imageUrls.isNotEmpty) ? imageUrls : [imageUrl];
 
-  factory PostModel.fromMap(Map<String, dynamic> m) => PostModel(
-    id:           m['id'] as String,
-    authorId:     m['author_id'] as String,
-    title:        m['title'] as String,
-    description:  (m['description'] ?? '') as String,
-    imageUrl:     m['image_url'] as String,
-    category:     (m['category'] ?? '2D Illustration') as String,
-    tags:         List<String>.from(m['tags'] ?? []),
-    visibility:   (m['visibility'] ?? 'public') as String,
-    likesCount:   (m['likes_count'] ?? 0) as int,
-    createdAt:    DateTime.parse(m['created_at'] as String),
-    authorHandle: m['author_handle'] as String?,
-    authorName:   m['author_name'] as String?,
-    authorAvatar: m['author_avatar'] as String?,
-  );
+  factory PostModel.fromMap(Map<String, dynamic> m) {
+    final primary = m['image_url'] as String;
+    final urls = m['image_urls'] != null
+        ? List<String>.from(m['image_urls'] as List)
+        : <String>[];
+    if (urls.isEmpty) urls.add(primary);
+    return PostModel(
+      id:           m['id'] as String,
+      authorId:     m['author_id'] as String,
+      title:        m['title'] as String,
+      description:  (m['description'] ?? '') as String,
+      imageUrl:     primary,
+      imageUrls:    urls,
+      category:     (m['category'] ?? '2D Illustration') as String,
+      tags:         List<String>.from(m['tags'] ?? []),
+      visibility:   (m['visibility'] ?? 'public') as String,
+      likesCount:   (m['likes_count'] ?? 0) as int,
+      createdAt:    DateTime.parse(m['created_at'] as String),
+      authorHandle: m['author_handle'] as String?,
+      authorName:   m['author_name'] as String?,
+      authorAvatar: m['author_avatar'] as String?,
+    );
+  }
 
   Map<String, dynamic> toInsertMap() => {
     'author_id': authorId, 'title': title, 'description': description,
-    'image_url': imageUrl, 'category': category, 'tags': tags,
-    'visibility': visibility,
+    'image_url': imageUrl, 'image_urls': imageUrls,
+    'category': category, 'tags': tags, 'visibility': visibility,
   };
 }
 
@@ -100,12 +112,12 @@ class CommentModel {
   final String id;
   final String postId;
   final String authorId;
-  final String body;
+  String body; // mutable for inline edit
   final DateTime createdAt;
   final String? authorHandle;
   final String? authorAvatar;
 
-  const CommentModel({
+  CommentModel({
     required this.id,
     required this.postId,
     required this.authorId,
@@ -132,7 +144,6 @@ class ConversationModel {
   final String participant2;
   final String lastMessage;
   final DateTime updatedAt;
-  // Other participant's info (populated in app)
   ProfileModel? otherProfile;
 
   ConversationModel({

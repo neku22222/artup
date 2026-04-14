@@ -1,11 +1,14 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import '../models.dart';
 import '../services/supabase_service.dart';
 import '../widgets/common_widgets.dart';
 import '../theme/app_theme.dart';
 import 'post_detail_screen.dart';
 import 'dm_screen.dart';
+import 'followers_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   final String userId;
@@ -37,38 +40,102 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (!_isOwnProfile) profileService.isFollowing(widget.userId),
       ]);
       if (mounted) setState(() {
-        _profile    = results[0] as ProfileModel?;
-        _posts      = results[1] as List<PostModel>;
-        _isFollowing = _isOwnProfile ? false : (results[2] as bool? ?? false);
-        _loading    = false;
+        _profile     = results[0] as ProfileModel?;
+        _posts       = results[1] as List<PostModel>;
+        _isFollowing = _isOwnProfile ? false : (results.length > 2 ? results[2] as bool : false);
+        _loading     = false;
       });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
   }
 
+  // ── Fix #4: optimistic counter update ────────────────────────────────────
   Future<void> _toggleFollow() async {
-    if (_followLoading) return;
-    setState(() => _followLoading = true);
-    try {
+    if (_followLoading || _profile == null) return;
+    setState(() {
+      _followLoading = true;
       if (_isFollowing) {
+        _isFollowing = false;
+        _profile!.followersCount = (_profile!.followersCount - 1).clamp(0, 999999);
+      } else {
+        _isFollowing = true;
+        _profile!.followersCount += 1;
+      }
+    });
+    try {
+      if (!_isFollowing) {
+        // we already flipped to false above, so if it's now false we just unfollowed
         await profileService.unfollow(widget.userId);
-        setState(() { _isFollowing = false; if (_profile != null) { } });
       } else {
         await profileService.follow(widget.userId);
-        setState(() => _isFollowing = true);
       }
-    } catch (_) {} finally {
+    } catch (_) {
+      // revert on error
+      setState(() {
+        if (_isFollowing) {
+          _isFollowing = false;
+          _profile!.followersCount = (_profile!.followersCount - 1).clamp(0, 999999);
+        } else {
+          _isFollowing = true;
+          _profile!.followersCount += 1;
+        }
+      });
+    } finally {
       if (mounted) setState(() => _followLoading = false);
     }
   }
 
   Future<void> _openDM() async {
+    if (_profile == null) return;
     final convo = await dmService.getOrCreateConversation(widget.userId);
     if (mounted) {
       Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => ChatScreen(conversation: convo, otherProfile: _profile!)));
     }
+  }
+
+  // ── Fix #7: change profile picture ───────────────────────────────────────
+  Future<void> _changeAvatar() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (picked == null || !mounted) return;
+
+    final file = File(picked.path);
+    final uid  = authService.currentUserId!;
+
+    // Optimistic UI: show local file immediately
+    final localUrl = picked.path;
+    setState(() => _profile!.avatarUrl = localUrl);
+
+    try {
+      final url = await storageService.uploadAvatar(file, uid);
+      await profileService.updateProfile(userId: uid, avatarUrl: url);
+      if (mounted) setState(() => _profile!.avatarUrl = url);
+    } catch (_) {
+      // revert
+      if (mounted) _load();
+    }
+  }
+
+  // ── Stat column — tappable for own profile (followers + following) or
+  //    only following when viewing someone else ──────────────────────────────
+  void _onStatTap(String type) {
+    if (_profile == null) return;
+    final uid = _profile!.id;
+    final handle = _profile!.handle;
+
+    if (type == 'followers' && _isOwnProfile) {
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => FollowListScreen(
+              userId: uid, type: FollowListType.followers, handle: handle)));
+    } else if (type == 'following') {
+      // both own + others can view following
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => FollowListScreen(
+              userId: uid, type: FollowListType.following, handle: handle)));
+    }
+    // posts count — no action needed
   }
 
   @override
@@ -86,18 +153,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                     sliver: _posts.isEmpty
                         ? const SliverToBoxAdapter(
-                            child: EmptyState(emoji: '🎨', title: 'No posts yet', subtitle: 'This artist hasn\'t posted anything yet'))
+                            child: EmptyState(
+                                emoji: '🎨',
+                                title: 'No posts yet',
+                                subtitle: 'This artist hasn\'t posted anything yet'))
                         : SliverGrid(
                             delegate: SliverChildBuilderDelegate(
                               (_, i) => PostCard(
                                 post: _posts[i],
-                                onTap: () => Navigator.of(context).push(
-                                    MaterialPageRoute(builder: (_) => PostDetailScreen(postId: _posts[i].id))),
+                                onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                                    builder: (_) => PostDetailScreen(postId: _posts[i].id))),
                               ),
                               childCount: _posts.length,
                             ),
                             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 2, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 4 / 3,
+                              crossAxisCount: 2, crossAxisSpacing: 8,
+                              mainAxisSpacing: 8, childAspectRatio: 4 / 3,
                             ),
                           ),
                   ),
@@ -105,19 +176,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  SliverAppBar _buildAppBar() {
-    return SliverAppBar(
-      backgroundColor: AppColors.warmWhite,
-      elevation: 0,
-      pinned: true,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: AppColors.dark),
-        onPressed: () => Navigator.of(context).pop(),
-      ),
-      title: Text('@${_profile!.handle}',
-          style: GoogleFonts.dmSans(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.dark)),
-    );
-  }
+  SliverAppBar _buildAppBar() => SliverAppBar(
+        backgroundColor: AppColors.warmWhite,
+        elevation: 0,
+        pinned: true,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: AppColors.dark),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: Text('@${_profile!.handle}',
+            style: GoogleFonts.dmSans(
+                fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.dark)),
+      );
 
   Widget _buildProfileInfo() {
     final p = _profile!;
@@ -125,28 +195,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
       padding: const EdgeInsets.all(20),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          UserAvatar(url: p.avatarUrl, size: 72),
+          // Avatar — tappable only on own profile
+          Stack(
+            children: [
+              UserAvatar(url: p.avatarUrl, size: 72,
+                  onTap: _isOwnProfile ? _changeAvatar : null),
+              if (_isOwnProfile)
+                Positioned(
+                  bottom: 0, right: 0,
+                  child: GestureDetector(
+                    onTap: _changeAvatar,
+                    child: Container(
+                      width: 22, height: 22,
+                      decoration: const BoxDecoration(
+                          color: AppColors.peach, shape: BoxShape.circle),
+                      child: const Icon(Icons.camera_alt, color: Colors.white, size: 12),
+                    ),
+                  ),
+                ),
+            ],
+          ),
           const Spacer(),
-          // Stats
-          _statCol('${p.postsCount}', 'Posts'),
+          // Tappable stat columns
+          _statCol('${p.postsCount}', 'Posts', null),
           const SizedBox(width: 20),
-          _statCol('${p.followersCount}', 'Followers'),
+          _statCol(
+            '${p.followersCount}',
+            'Followers',
+            _isOwnProfile ? () => _onStatTap('followers') : null,
+          ),
           const SizedBox(width: 20),
-          _statCol('${p.followingCount}', 'Following'),
+          _statCol(
+            '${p.followingCount}',
+            'Following',
+            () => _onStatTap('following'),
+          ),
         ]),
         const SizedBox(height: 14),
         if (p.fullName.isNotEmpty)
           Text(p.fullName,
-              style: GoogleFonts.dmSans(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.dark)),
+              style: GoogleFonts.dmSans(
+                  fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.dark)),
         Text('@${p.handle}',
             style: GoogleFonts.dmSans(fontSize: 13, color: AppColors.muted)),
         if (p.bio.isNotEmpty) ...[
           const SizedBox(height: 8),
-          Text(p.bio, style: GoogleFonts.dmSans(fontSize: 13, color: AppColors.dark, height: 1.5)),
+          Text(p.bio,
+              style: GoogleFonts.dmSans(fontSize: 13, color: AppColors.dark, height: 1.5)),
         ],
         if (p.website.isNotEmpty) ...[
           const SizedBox(height: 4),
-          Text(p.website, style: GoogleFonts.dmSans(fontSize: 12, color: AppColors.peach)),
+          Text(p.website,
+              style: GoogleFonts.dmSans(fontSize: 12, color: AppColors.peach)),
         ],
         const SizedBox(height: 14),
 
@@ -160,7 +260,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               minimumSize: const Size(double.infinity, 38),
             ),
             child: Text('Edit Profile',
-                style: GoogleFonts.dmSans(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.dark)),
+                style: GoogleFonts.dmSans(
+                    fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.dark)),
           )
         else
           Row(children: [
@@ -174,16 +275,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     color: _isFollowing ? AppColors.cardBg : AppColors.peach,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: _isFollowing ? AppColors.border : AppColors.peach, width: 1.5),
+                        color: _isFollowing ? AppColors.border : AppColors.peach,
+                        width: 1.5),
                   ),
                   alignment: Alignment.center,
                   child: _followLoading
-                      ? const SizedBox(height: 16, width: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.peach))
-                      : Text(_isFollowing ? 'Following' : 'Follow',
+                      ? const SizedBox(
+                          height: 16, width: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: AppColors.peach))
+                      : Text(
+                          _isFollowing ? 'Following' : 'Follow',
                           style: GoogleFonts.dmSans(
                               fontSize: 13, fontWeight: FontWeight.w600,
-                              color: _isFollowing ? AppColors.dark : Colors.white)),
+                              color: _isFollowing ? AppColors.dark : Colors.white),
+                        ),
                 ),
               ),
             ),
@@ -197,7 +303,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: AppColors.border, width: 1.5),
                 ),
-                child: const Icon(Icons.chat_bubble_outline, color: AppColors.dark, size: 18),
+                child: const Icon(Icons.chat_bubble_outline,
+                    color: AppColors.dark, size: 18),
               ),
             ),
           ]),
@@ -208,11 +315,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _statCol(String value, String label) {
-    return Column(children: [
-      Text(value, style: GoogleFonts.dmSans(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.dark)),
-      Text(label, style: GoogleFonts.dmSans(fontSize: 11, color: AppColors.muted)),
-    ]);
+  Widget _statCol(String value, String label, VoidCallback? onTap) {
+    final tappable = onTap != null;
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(children: [
+        Text(value,
+            style: GoogleFonts.dmSans(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: tappable ? AppColors.peach : AppColors.dark)),
+        Text(label,
+            style: GoogleFonts.dmSans(
+                fontSize: 11,
+                color: tappable ? AppColors.peach : AppColors.muted,
+                decoration: tappable ? TextDecoration.underline : null)),
+      ]),
+    );
   }
 
   void _showEditProfile(BuildContext context) {
@@ -224,41 +343,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: AppColors.cream,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => Padding(
         padding: EdgeInsets.only(
-            left: 20, right: 20, top: 20, bottom: MediaQuery.of(context).viewInsets.bottom + 20),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Edit Profile', style: GoogleFonts.dmSans(fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.dark)),
-          const SizedBox(height: 16),
-          TextField(controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Full Name'),
-              style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark)),
-          const SizedBox(height: 12),
-          TextField(controller: bioCtrl, maxLines: 3,
-              decoration: const InputDecoration(labelText: 'Bio'),
-              style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark)),
-          const SizedBox(height: 12),
-          TextField(controller: websiteCtrl,
-              decoration: const InputDecoration(labelText: 'Website'),
-              style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark)),
-          const SizedBox(height: 20),
-          GradientButton(
-            label: 'Save Changes',
-            onPressed: () async {
-              await profileService.updateProfile(
-                userId: widget.userId,
-                fullName: nameCtrl.text.trim(),
-                bio: bioCtrl.text.trim(),
-                website: websiteCtrl.text.trim(),
-              );
-              if (mounted) {
-                Navigator.of(context).pop();
-                _load();
-              }
-            },
-          ),
-        ]),
+            left: 20, right: 20, top: 20,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20),
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Edit Profile',
+                  style: GoogleFonts.dmSans(
+                      fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.dark)),
+              const SizedBox(height: 16),
+              TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Full Name'),
+                  style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark)),
+              const SizedBox(height: 12),
+              TextField(
+                  controller: bioCtrl,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: 'Bio'),
+                  style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark)),
+              const SizedBox(height: 12),
+              TextField(
+                  controller: websiteCtrl,
+                  decoration: const InputDecoration(labelText: 'Website'),
+                  style: GoogleFonts.dmSans(fontSize: 14, color: AppColors.dark)),
+              const SizedBox(height: 20),
+              GradientButton(
+                label: 'Save Changes',
+                onPressed: () async {
+                  await profileService.updateProfile(
+                    userId: widget.userId,
+                    fullName: nameCtrl.text.trim(),
+                    bio: bioCtrl.text.trim(),
+                    website: websiteCtrl.text.trim(),
+                  );
+                  if (mounted) {
+                    Navigator.of(context).pop();
+                    _load();
+                  }
+                },
+              ),
+            ]),
       ),
     );
   }

@@ -50,7 +50,7 @@ class UserAvatar extends StatelessWidget {
   }
 }
 
-// ── Post Card ─────────────────────────────────────────────────────────────────
+// ── Post Card — fix #5: colored backdrop + avatar next to author ──────────────
 class PostCard extends StatefulWidget {
   final PostModel post;
   final VoidCallback? onTap;
@@ -65,7 +65,6 @@ class PostCard extends StatefulWidget {
 
 class _PostCardState extends State<PostCard> {
   bool _loading = false;
-
   String _fmt(int n) => n >= 1000 ? '${(n / 1000).toStringAsFixed(1)}k' : '$n';
 
   @override
@@ -78,8 +77,10 @@ class _PostCardState extends State<PostCard> {
         child: AspectRatio(
           aspectRatio: 4 / 3,
           child: Stack(fit: StackFit.expand, children: [
+            // Artwork thumbnail
             AppNetworkImage(url: post.imageUrl),
-            // Like badge
+
+            // Like badge — top right
             Positioned(
               top: 8, right: 8,
               child: GestureDetector(
@@ -94,8 +95,8 @@ class _PostCardState extends State<PostCard> {
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: post.isLiked
-                        ? AppColors.peach.withOpacity(0.9)
-                        : Colors.white.withOpacity(0.2),
+                        ? AppColors.peach.withOpacity(0.92)
+                        : Colors.black.withOpacity(0.35),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -108,30 +109,70 @@ class _PostCardState extends State<PostCard> {
                 ),
               ),
             ),
-            // Overlay
+
+            // Bottom overlay: strong gradient + colored backdrop chip
             Positioned(
               bottom: 0, left: 0, right: 0,
               child: Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Color(0xAA140C08)],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Color(0xCC0A0604)],
                   ),
                 ),
-                padding: const EdgeInsets.fromLTRB(10, 20, 10, 8),
-                child: Row(children: [
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(post.title,
-                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                padding: const EdgeInsets.fromLTRB(8, 24, 8, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Title with colored backdrop
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppColors.peach.withOpacity(0.85),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        post.title,
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 10,
+                            fontWeight: FontWeight.w700, height: 1.2),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    // Author row: avatar + handle with dark backdrop
                     if (post.authorHandle != null)
                       GestureDetector(
                         onTap: widget.onAuthorTap,
-                        child: Text('@${post.authorHandle}',
-                            style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 9)),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.45),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            // Author avatar
+                            ClipOval(
+                              child: post.authorAvatar != null && post.authorAvatar!.isNotEmpty
+                                  ? AppNetworkImage(url: post.authorAvatar!, width: 14, height: 14)
+                                  : Container(width: 14, height: 14, color: AppColors.peachPale,
+                                      child: const Icon(Icons.person, color: AppColors.peach, size: 9)),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              '@${post.authorHandle}',
+                              style: TextStyle(
+                                  color: Colors.white.withOpacity(0.9),
+                                  fontSize: 9, fontWeight: FontWeight.w500),
+                            ),
+                          ]),
+                        ),
                       ),
-                  ])),
-                ]),
+                  ],
+                ),
               ),
             ),
           ]),
@@ -175,7 +216,7 @@ class AppSearchBar extends StatelessWidget {
             ),
           ),
         ),
-        if (controller != null && (controller!.text.isNotEmpty))
+        if (controller != null && controller!.text.isNotEmpty)
           GestureDetector(
             onTap: () { controller!.clear(); onChanged?.call(''); },
             child: const Icon(Icons.close, color: AppColors.muted, size: 14),
@@ -236,7 +277,7 @@ class SectionHeader extends StatelessWidget {
   }
 }
 
-// ── Error/Empty State ─────────────────────────────────────────────────────────
+// ── Empty State ───────────────────────────────────────────────────────────────
 class EmptyState extends StatelessWidget {
   final String emoji;
   final String title;
@@ -258,30 +299,6 @@ class EmptyState extends StatelessWidget {
           Text(subtitle, style: GoogleFonts.dmSans(fontSize: 13, color: AppColors.muted),
               textAlign: TextAlign.center),
         ]),
-      ),
-    );
-  }
-}
-
-// ── Loading Grid ──────────────────────────────────────────────────────────────
-class LoadingGrid extends StatelessWidget {
-  const LoadingGrid({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 4 / 3,
-        ),
-        itemCount: 6,
-        itemBuilder: (_, __) => ClipRRect(
-          borderRadius: BorderRadius.circular(14),
-          child: Container(color: AppColors.border),
-        ),
       ),
     );
   }
@@ -313,7 +330,8 @@ class GradientButton extends StatelessWidget {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           ),
           child: loading
-              ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+              ? const SizedBox(height: 20, width: 20,
+                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
               : Text(label, style: GoogleFonts.dmSans(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
         ),
       ),
